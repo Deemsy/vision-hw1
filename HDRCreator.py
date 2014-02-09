@@ -3,16 +3,18 @@ import getopt
 import cv2
 import numpy as np
 import math 
+
+
 class HDRCreator:
     def __init__(self):
         
-        //images
+        #images
         self.images=[]
         
-        //shutter speed
+        #shutter speed
         self.speeds=[]
 
-        //hdr image
+        #hdr image
         self.hdr=None
     def loadimages(self,filename):
         file=open(filename)
@@ -25,12 +27,14 @@ class HDRCreator:
             image=cv2.imread(filename)
             self.images.append(image)
             self.speeds.append(math.log(exposure))
+
+
     def createHDR(self):
         channels=[]
         for channel in range(3):
 
             #create pixel x num images array to solve linear system
-            numPixels=70
+            numPixels=140
             A=np.zeros((numPixels,len(self.images)),np.uint32)
             B=self.images
             
@@ -38,7 +42,7 @@ class HDRCreator:
             for imageNum in range(len(self.images)):
                 img=cv2.split(self.images[imageNum])[channel] #get the correct channel
                 for pixel in range(numPixels):
-                    A[pixel,imageNum]=img[pixel*10,256]
+                    A[pixel,imageNum]=img[pixel*5,256]
 
             #solve the system
             g=self.solveSystem(A,self.speeds,1)
@@ -47,20 +51,27 @@ class HDRCreator:
             #weighted average of intensities of each image
             rows=self.images[0].shape[0]
             cols=self.images[0].shape[1]
+            
+            #initialize matrix for radiance map and the normalization term of radiance map 
+            #used to make weighted average over all images
             radianceMap=np.zeros((rows,cols),np.uint32)
             normalization=np.zeros((rows,cols),np.uint32)
+
+            #vectorize the weighting function to speed it up
             vecWeight=np.vectorize(self.weight)
+
             for imageNum in range(len(self.images)):
                 img=cv2.split(self.images[imageNum])[channel] #get the correct channel
                 print imageNum,"/",len(self.images)
-                normalization=normalization+vecWeight(img)
                 temp=vecWeight(img)
+                normalization=normalization+temp
                 speed=self.speeds[imageNum]
                 for r in range(rows):
                     for c in range(cols):
                         temp[r,c]*=(g[img[r,c]]-speed)
                 radianceMap=radianceMap+temp
-            np.divide(radianceMap,normalization) 
+            radianceMap=np.divide(radianceMap,normalization) 
+            radianceMap=np.exp(radianceMap)
             channels.append(radianceMap)
         #combine channels
         combined=cv2.merge([channels[0],channels[1],channels[2]])
@@ -72,7 +83,8 @@ class HDRCreator:
         #
         #save file with opencv
         #HDR saving isn't working for me, but JPG,TIFF,EXR do work
-        #cv2.imwrite('output.hdr',combined)
+        cv2.imwrite('output.exr',combined)
+        cv2.imwrite('output.jpg',combined)
         
         image=combined
         #HDR saving code found at https://gist.github.com/edouardp/3089602
@@ -99,15 +111,17 @@ class HDRCreator:
         f.close()
 
 
-
+    # mexican hat weighting function
+    # assumes intensities are in [0,255]
     def weight(self,w):
-        min=1
+        min=0
         max=255
-        if w<= (min+max)/2:
+        if w<=(min+max)/2:
             weighted= w-min
         else:
             weighted=max-w
         return weighted
+
     def solveSystem(self,Z,B,lamb):
         n=256
         rowsZ=Z.shape[0]
@@ -143,7 +157,8 @@ class HDRCreator:
 
 def main():
     if len(sys.argv)<2:
-        sys.exit("usage: HDRCreator imagelist")
+        print 'No parameter, supply name of file with list of images and shutter speeds'
+        sys.exit("usage: HDRCreator imagelist.txt")
     hd=HDRCreator()
     hd.loadimages(sys.argv[1])
     hd.createHDR()
